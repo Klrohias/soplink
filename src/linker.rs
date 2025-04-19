@@ -1,7 +1,19 @@
 use anyhow::anyhow;
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    path::Path,
+    process::{Command, Output},
+};
 
 use crate::environment::list_dir_glob;
+
+fn invoke_command(cmd: &mut Command, verbose: bool) -> Result<Output, anyhow::Error> {
+    if verbose {
+        Ok(cmd.spawn()?.wait_with_output()?)
+    } else {
+        Ok(cmd.output()?)
+    }
+}
 
 pub fn read_symbols<P>(
     options: &super::cli::CliOptions,
@@ -12,14 +24,16 @@ where
 {
     let lib_path = lib_path.as_ref().to_string_lossy().to_string();
     if cfg!(target_os = "macos") {
-        let output = Command::new(
-            options
-                .symbol_provider_tool
-                .as_ref()
-                .ok_or(anyhow!("Symbol provider tool is not specified"))?,
-        )
-        .args(["-jgUA", &lib_path])
-        .output()?;
+        let output = invoke_command(
+            Command::new(
+                options
+                    .symbol_provider_tool
+                    .as_ref()
+                    .ok_or(anyhow!("Symbol provider tool is not specified"))?,
+            )
+            .args(["-jgUA", &lib_path]),
+            options.verbose,
+        )?;
 
         if !output.status.success() && !options.force {
             return Err(anyhow!(String::from_utf8(output.stderr)?));
@@ -49,15 +63,17 @@ where
 {
     let lib_path = lib_path.as_ref().to_string_lossy().to_string();
     if cfg!(target_os = "macos") {
-        let output = Command::new(
-            options
-                .archiver_tool
-                .as_ref()
-                .ok_or(anyhow!("Archiver tool is not specified"))?,
-        )
-        .args(["x", &lib_path])
-        .current_dir(output)
-        .output()?;
+        let output = invoke_command(
+            Command::new(
+                options
+                    .archiver_tool
+                    .as_ref()
+                    .ok_or(anyhow!("Archiver tool is not specified"))?,
+            )
+            .args(["x", &lib_path])
+            .current_dir(output),
+            options.verbose,
+        )?;
 
         if !output.status.success() && !options.force {
             return Err(anyhow!(String::from_utf8(output.stderr)?));
@@ -72,15 +88,16 @@ where
 pub fn link_static_lib<P, O>(
     options: &super::cli::CliOptions,
     extract_path: P,
-    output_name: O,
+    output_path: O,
     symbol_list: &Vec<String>,
 ) -> Result<(), anyhow::Error>
 where
     P: AsRef<Path>,
-    O: AsRef<str>,
+    O: AsRef<Path>,
 {
     if cfg!(target_os = "macos") {
         const SYMBOLS_LIST_FILE: &str = "symbols-list.txt";
+        const PRELINKED_FILE: &str = "prelinked.o";
         // write symbols list
         fs::write(
             extract_path.as_ref().join(SYMBOLS_LIST_FILE),
@@ -90,28 +107,41 @@ where
         // invoke ld
         let objects = list_dir_glob(&extract_path, "*.o")?;
 
-        let output = Command::new(
-            options
-                .linker_tool
-                .as_ref()
-                .ok_or(anyhow!("Linker tool is not specified"))?,
-        )
-        .args(
-            [
-                "-r",
-                "-exported_symbols_list",
-                SYMBOLS_LIST_FILE,
-                "-o",
-                output_name.as_ref(),
-            ]
-            .into_iter()
-            .chain(objects.iter().map(|x| x.as_str())),
-        )
-        .current_dir(extract_path.as_ref())
-        .output()?;
+        let output = invoke_command(
+            Command::new(
+                options
+                    .linker_tool
+                    .as_ref()
+                    .ok_or(anyhow!("Linker tool is not specified"))?,
+            )
+            .args(
+                [
+                    "-r",
+                    "-exported_symbols_list",
+                    SYMBOLS_LIST_FILE,
+                    "-o",
+                    PRELINKED_FILE,
+                ]
+                .into_iter()
+                .chain(objects.iter().map(|x| x.as_str())),
+            )
+            .current_dir(extract_path.as_ref()),
+            options.verbose,
+        )?;
 
+        // check ld error
         if !output.status.success() && !options.force {
             return Err(anyhow!(String::from_utf8(output.stderr)?));
+        }
+
+        // check file gennerated
+        let prelinked_path = extract_path.as_ref().join(PRELINKED_FILE);
+        if !prelinked_path.is_file() {
+            return Err(anyhow!("Cannot link the prelinked object"));
+        }
+
+        if let Err(e) = fs::rename(prelinked_path, output_path.as_ref()) {
+            return Err(anyhow!("Cannot move the prelinked object: {}", e));
         }
 
         Ok(())
@@ -120,7 +150,7 @@ where
     }
 }
 
-pub fn generate_static_lib_from_all<P, O>(
+pub fn generate_static_lib_from_all_object<P, O>(
     options: &super::cli::CliOptions,
     lib_path: P,
     output: O,
@@ -133,20 +163,21 @@ where
         let output = output.as_ref().to_string_lossy().to_string();
         let objects = list_dir_glob(&lib_path, "*.o")?;
 
-        let output = Command::new(
-            options
-                .generator_tool
-                .as_ref()
-                .ok_or(anyhow!("Generator tool is not specified"))?,
-        )
-        .args(
-            ["-static", "-o", &output]
-                .into_iter()
-                .chain(objects.iter().map(|x| x.as_str())),
-        )
-        .current_dir(&lib_path)
-        .spawn()?
-        .wait_with_output()?;
+        let output = invoke_command(
+            Command::new(
+                options
+                    .generator_tool
+                    .as_ref()
+                    .ok_or(anyhow!("Generator tool is not specified"))?,
+            )
+            .args(
+                ["-static", "-o", &output]
+                    .into_iter()
+                    .chain(objects.iter().map(|x| x.as_str())),
+            )
+            .current_dir(&lib_path),
+            options.verbose,
+        )?;
 
         if !output.status.success() && !options.force {
             return Err(anyhow!(String::from_utf8(output.stderr)?));

@@ -59,4 +59,7 @@ pub struct CliOptions {
         help = "Ignore all error when invoking tools"
     )]
     pub force: bool,
+
+    #[arg(short = 'v', long = "verbose", help = "Display all the output")]
+    pub verbose: bool,
 }

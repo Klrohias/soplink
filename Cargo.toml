@@ -7,3 +7,4 @@ edition = "2024"
 anyhow = "1.0.98"
 clap = { version = "4.5.36", features = ["derive"] }
 glob-match = "=0.2.1"
+fatal = "0.1.1"

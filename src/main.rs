@@ -5,7 +5,7 @@ mod linker;
 use std::{
     fs::{self, read_to_string},
     io::stderr,
-    path::{self, PathBuf},
+    path::{self, Path, PathBuf},
     str::FromStr,
 };
 
@@ -13,8 +13,11 @@ use anyhow::anyhow;
 use clap::Parser;
 use cli::CliOptions;
 use environment::{find_all_tool_from_env, print_with_prefix};
+use fatal::fatal;
 use glob_match::glob_match;
-use linker::{extract_static_lib, generate_static_lib_from_all, link_static_lib, read_symbols};
+use linker::{
+    extract_static_lib, generate_static_lib_from_all_object, link_static_lib, read_symbols,
+};
 
 const TEMP_ROOT: &str = ".soplink.tmp";
 
@@ -29,15 +32,12 @@ fn load_symbol_list(options: &mut CliOptions) -> Result<(), anyhow::Error> {
     if options.symbol_lists == None {
         return Ok(());
     }
-
-    let symbols = read_to_string(options.symbol_lists.as_ref().unwrap())?;
-    for symbol in symbols
+    read_to_string(options.symbol_lists.as_ref().unwrap())?
         .split('\n')
         .map(|x| x.trim())
-        .filter(|x| !x.is_empty() && !x.starts_with('\''))
-    {
-        options.symbols.push(symbol.to_string());
-    }
+        .filter(|x| !x.is_empty() && !x.starts_with('#'))
+        .into_iter()
+        .for_each(|x| options.symbols.push(x.to_string()));
 
     Ok(())
 }
@@ -51,7 +51,7 @@ fn create_workspace() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn create_extract_path(lib_name: &str) -> Result<PathBuf, anyhow::Error> {
+fn create_extract_dir(lib_name: &str) -> Result<PathBuf, anyhow::Error> {
     let path = PathBuf::from_str(TEMP_ROOT)?.join(lib_name);
     if fs::exists(&path)? {
         fs::remove_dir_all(&path)?;
@@ -76,7 +76,7 @@ where
         path: lib_path.to_owned(),
         name: PathBuf::from_str(lib_path.as_ref())?
             .file_name()
-            .ok_or(anyhow!("Failed to get file name for {}", lib_path))?
+            .unwrap_or_default()
             .to_string_lossy()
             .to_string(),
         symbols: read_symbols(&options, lib_path)?
@@ -87,25 +87,21 @@ where
 }
 
 fn link_lib(options: &CliOptions, lib: &StaticLib) -> Result<(), anyhow::Error> {
-    const PRELINK_OBJ: &str = "prelink.o";
-    let extract_path = create_extract_path(&lib.name)?;
+    let extract_path = create_extract_dir(&lib.name)?;
     extract_static_lib(options, &lib.path, &extract_path)?;
-    link_static_lib(options, &extract_path, PRELINK_OBJ, &lib.symbols)?;
 
-    fs::rename(
-        &extract_path.join(PRELINK_OBJ),
-        PathBuf::from_str(TEMP_ROOT)?.join(format!("{}.prelink.o", &lib.name)),
-    )?;
+    let output_path = PathBuf::from_str(TEMP_ROOT)?.join(format!("{}.prelink.o", &lib.name));
+    link_static_lib(options, &extract_path, output_path, &lib.symbols)?;
 
     Ok(())
 }
 
-fn run(mut options: CliOptions) -> Result<(), anyhow::Error> {
+fn run(options: &mut CliOptions) -> Result<(), anyhow::Error> {
     // find all undefined toolls
-    find_all_tool_from_env(&mut options)?;
+    find_all_tool_from_env(options)?;
 
     // load symbol list if have
-    load_symbol_list(&mut options)?;
+    load_symbol_list(options)?;
 
     // begin
     create_workspace()?;
@@ -116,7 +112,15 @@ fn run(mut options: CliOptions) -> Result<(), anyhow::Error> {
         match resolve_lib(&options, file_path) {
             Ok(x) => libs.push(x),
             Err(e) => {
-                print_with_prefix(&mut stderr().lock(), file_path, e.to_string());
+                print_with_prefix(
+                    &mut stderr().lock(),
+                    PathBuf::from_str(file_path.as_str())?
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_str()
+                        .unwrap_or_default(),
+                    e.to_string(),
+                );
                 return Err(anyhow!("Failed to resolve one or more library"));
             }
         }
@@ -131,7 +135,7 @@ fn run(mut options: CliOptions) -> Result<(), anyhow::Error> {
     }
 
     // generate static lib
-    generate_static_lib_from_all(
+    generate_static_lib_from_all_object(
         &options,
         TEMP_ROOT,
         path::absolute(PathBuf::from_str(
@@ -149,17 +153,17 @@ fn run(mut options: CliOptions) -> Result<(), anyhow::Error> {
 
 fn main() {
     // parse options
-    let options = CliOptions::parse();
+    let mut options = CliOptions::parse();
 
     // check os
     if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
         // supported
     } else {
         // on a not supported OS
-        panic!("Current operation system is not supported");
+        fatal!("Current operation system is not supported");
     }
 
-    if let Err(e) = run(options) {
-        panic!("{}", e);
+    if let Err(e) = run(&mut options) {
+        fatal!("soplink: {}", e);
     }
 }
