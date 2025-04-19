@@ -35,13 +35,13 @@ jobs:
           file: "${{github.workspace}}/outputs/built-x64-osx/soplink"
           asset_name: "soplink-x64-osx"
 
-      - name: Upload to release (built-aarch64-osx)
+      - name: Upload to release (built-arm64-osx)
         if: '!cancelled()'
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: "${{github.workspace}}/outputs/built-aarch64-osx/soplink"
-          asset_name: "soplink-aarch64-osx"
+          file: "${{github.workspace}}/outputs/built-arm64-osx/soplink"
+          asset_name: "soplink-arm64-osx"
 
       - name: Upload to release (built-x64-linux)
         if: '!cancelled()'
