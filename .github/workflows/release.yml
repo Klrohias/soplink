@@ -1,0 +1,52 @@
+name: release
+
+on: 
+  push:
+    tags: [ 'v*.*.*' ]
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build-linux:
+    uses: ./.github/workflows/build-linux.yml
+
+  build-macos:
+    uses: ./.github/workflows/build-macos.yml
+
+  releasing:
+    runs-on: ubuntu-latest
+    needs: ['build-linux', 'build-macos']
+    if: '!cancelled()'
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: 'outputs/'
+
+      - name: Upload to release (built-x64-osx)
+        if: '!cancelled()'
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: "${{github.workspace}}/outputs/built-x64-osx/soplink"
+          asset_name: "soplink-x64-osx"
+
+      - name: Upload to release (built-aarch64-osx)
+        if: '!cancelled()'
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: "${{github.workspace}}/outputs/built-aarch64-osx/soplink"
+          asset_name: "soplink-aarch64-osx"
+
+      - name: Upload to release (built-x64-linux)
+        if: '!cancelled()'
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: "${{github.workspace}}/outputs/built-x64-linux/soplink"
+          asset_name: "soplink-x64-linux"

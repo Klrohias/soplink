@@ -1,0 +1,27 @@
+name: build-macos
+
+on:
+  workflow_dispatch: {}
+  workflow_call: {}
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build-darwin:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build Linux
+      if: '!cancelled()'
+      run: |
+        cargo build --release
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      if: '!cancelled()'
+      with:
+        name: built-x64-linux
+        path: ${{github.workspace}}/target/release/soplink
