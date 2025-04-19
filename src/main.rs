@@ -121,8 +121,18 @@ fn run(options: &mut CliOptions) -> Result<(), anyhow::Error> {
         }
     }
 
+    if libs.iter().all(|x| x.symbols.is_empty()) {
+        return Err(anyhow!("No hit symbols to export"));
+    }
+
     // link libs
     for lib in libs.iter() {
+        if options.verbose {
+            println!(
+                "Link the library {} with export symbols {:?}",
+                lib.name, lib.symbols
+            );
+        }
         if let Err(e) = link_lib(&options, lib) {
             print_with_prefix(&mut stderr().lock(), &lib.name, e.to_string());
             return Err(anyhow!("Failed to link one or more library"));
