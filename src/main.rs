@@ -2,12 +2,7 @@ mod cli;
 mod environment;
 mod linker;
 
-use std::{
-    fs::{self, read_to_string},
-    io::stderr,
-    path::{self, Path, PathBuf},
-    str::FromStr,
-};
+use std::{fs, io::stderr, path::PathBuf, str::FromStr};
 
 use anyhow::anyhow;
 use clap::Parser;
@@ -32,7 +27,7 @@ fn load_symbol_list(options: &mut CliOptions) -> Result<(), anyhow::Error> {
     if options.symbol_lists == None {
         return Ok(());
     }
-    read_to_string(options.symbol_lists.as_ref().unwrap())?
+    fs::read_to_string(options.symbol_lists.as_ref().unwrap())?
         .split('\n')
         .map(|x| x.trim())
         .filter(|x| !x.is_empty() && !x.starts_with('#'))
@@ -138,12 +133,12 @@ fn run(options: &mut CliOptions) -> Result<(), anyhow::Error> {
     generate_static_lib_from_all_object(
         &options,
         TEMP_ROOT,
-        path::absolute(PathBuf::from_str(
+        PathBuf::from_str(
             options
                 .output
                 .as_ref()
                 .map_or("soplink-out.a", |x| x.as_str()),
-        )?)?,
+        )?,
     )?;
 
     release_workspace()?;

@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use std::{
     fs,
-    path::Path,
+    path::{self, Path},
     process::{Command, Output},
 };
 
@@ -62,7 +62,7 @@ where
     O: AsRef<Path>,
 {
     let lib_path = lib_path.as_ref().to_string_lossy().to_string();
-    if cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
         let output = invoke_command(
             Command::new(
                 options
@@ -95,18 +95,19 @@ where
     P: AsRef<Path>,
     O: AsRef<Path>,
 {
+    const SYMBOLS_LIST_FILE: &str = "symbols-list.txt";
+    const PRELINKED_FILE: &str = "prelinked.o";
+
     if cfg!(target_os = "macos") {
-        const SYMBOLS_LIST_FILE: &str = "symbols-list.txt";
-        const PRELINKED_FILE: &str = "prelinked.o";
         // write symbols list
         fs::write(
             extract_path.as_ref().join(SYMBOLS_LIST_FILE),
             symbol_list.join("\n"),
         )?;
 
-        // invoke ld
         let objects = list_dir_glob(&extract_path, "*.o")?;
 
+        // invoke ld
         let output = invoke_command(
             Command::new(
                 options
@@ -145,6 +146,80 @@ where
         }
 
         Ok(())
+    } else if cfg!(target_os = "linux") {
+        // write symbols list
+        fs::write(
+            extract_path.as_ref().join(SYMBOLS_LIST_FILE),
+            symbol_list.join("\n"),
+        )?;
+
+        let objects = list_dir_glob(&extract_path, "*.o")?;
+
+        // invoke ld
+        let output = invoke_command(
+            Command::new(
+                options
+                    .linker_tool
+                    .as_ref()
+                    .ok_or(anyhow!("Linker tool is not specified"))?,
+            )
+            .args(
+                [
+                    "-r",
+                    format!("--export-dynamic-symbol-list={}", SYMBOLS_LIST_FILE).as_str(),
+                    "-o",
+                    PRELINKED_FILE,
+                ]
+                .into_iter()
+                .chain(objects.iter().map(|x| x.as_str())),
+            )
+            .current_dir(extract_path.as_ref()),
+            options.verbose,
+        )?;
+
+        // check ld error
+        if !output.status.success() && !options.force {
+            return Err(anyhow!(String::from_utf8(output.stderr)?));
+        }
+
+        // check file gennerated
+        let prelinked_path = extract_path.as_ref().join(PRELINKED_FILE);
+        if !prelinked_path.is_file() {
+            return Err(anyhow!("Cannot link the prelinked object"));
+        }
+
+        // invoke objcopy
+        let output = invoke_command(
+            Command::new(
+                options
+                    .generator_tool
+                    .as_ref()
+                    .ok_or(anyhow!("Generator tool is not specified"))?,
+            )
+            .args(
+                [
+                    "-r",
+                    format!("--keep-global-symbols={}", SYMBOLS_LIST_FILE).as_str(),
+                    PRELINKED_FILE,
+                ]
+                .into_iter()
+                .chain(objects.iter().map(|x| x.as_str())),
+            )
+            .current_dir(extract_path.as_ref()),
+            options.verbose,
+        )?;
+
+        // check objcopy error
+        if !output.status.success() && !options.force {
+            return Err(anyhow!(String::from_utf8(output.stderr)?));
+        }
+
+        // move
+        if let Err(e) = fs::rename(prelinked_path, output_path.as_ref()) {
+            return Err(anyhow!("Cannot move the prelinked object: {}", e));
+        }
+
+        Ok(())
     } else {
         Err(anyhow!("Unsupported OS"))
     }
@@ -159,8 +234,9 @@ where
     P: AsRef<Path>,
     O: AsRef<Path>,
 {
+    let output_path = path::absolute(output)?;
+
     if cfg!(target_os = "macos") {
-        let output = output.as_ref().to_string_lossy().to_string();
         let objects = list_dir_glob(&lib_path, "*.o")?;
 
         let output = invoke_command(
@@ -171,7 +247,39 @@ where
                     .ok_or(anyhow!("Generator tool is not specified"))?,
             )
             .args(
-                ["-static", "-o", &output]
+                [
+                    "-static",
+                    "-o",
+                    output_path.to_string_lossy().to_string().as_str(),
+                ]
+                .into_iter()
+                .chain(objects.iter().map(|x| x.as_str())),
+            )
+            .current_dir(&lib_path),
+            options.verbose,
+        )?;
+
+        if !output.status.success() && !options.force {
+            return Err(anyhow!(String::from_utf8(output.stderr)?));
+        }
+
+        if !output_path.is_file() {
+            return Err(anyhow!("Cannot generate static lib"));
+        }
+
+        Ok(())
+    } else if cfg!(target_os = "linux") {
+        let objects = list_dir_glob(&lib_path, "*.o")?;
+
+        let output = invoke_command(
+            Command::new(
+                options
+                    .archiver_tool
+                    .as_ref()
+                    .ok_or(anyhow!("Archiver tool is not specified"))?,
+            )
+            .args(
+                ["rs", output_path.to_string_lossy().to_string().as_str()]
                     .into_iter()
                     .chain(objects.iter().map(|x| x.as_str())),
             )
@@ -181,6 +289,10 @@ where
 
         if !output.status.success() && !options.force {
             return Err(anyhow!(String::from_utf8(output.stderr)?));
+        }
+
+        if !output_path.is_file() {
+            return Err(anyhow!("Cannot generate static lib"));
         }
 
         Ok(())
